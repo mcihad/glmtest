@@ -605,15 +605,14 @@ export function DataGrid<T>({
     return formatCellValue(value, row, col)
   }
 
-  const renderFormattedCell = (row: T, col: ColumnDef<T>, rowIndex: number) => {
+  const resolveCellFormat = (row: T, col: ColumnDef<T>) => {
     const rules = col.conditionalFormat
-    const value = getCellValue(row, col)
-    const content = renderCellContent(row, col, rowIndex)
-    if (!rules || rules.length === 0) return <>{content}</>
+    if (!rules || rules.length === 0) return null
 
     const matched = evalConditionalFormat(row, col, rules)
-    if (matched.length === 0) return <>{content}</>
+    if (matched.length === 0) return null
 
+    const value = getCellValue(row, col)
     const num = typeof value === 'number' ? value : parseFloat(String(value))
 
     const highlight = matched.find((r) => r.type === 'highlight')
@@ -621,12 +620,11 @@ export function DataGrid<T>({
     const colorScale = matched.find((r) => r.type === 'colorScale')
     const iconRule = matched.find((r) => r.type === 'iconArrow' || r.type === 'iconTraffic')
 
-    // Background color resolved from highlight or colorScale (highlight wins).
     let bg: string | undefined
     let textColor: string | undefined
     if (highlight) {
       const c = highlight.positiveColor ?? 'var(--primary)'
-      bg = `color-mix(in oklch, ${c} 18%, transparent)`
+      bg = `color-mix(in oklch, ${c} 16%, transparent)`
       textColor = c
     } else if (colorScale) {
       const scale = scales.get(col.id)
@@ -636,15 +634,15 @@ export function DataGrid<T>({
         const maxC = colorScale.maxColor ?? 'var(--destructive)'
         const midC = colorScale.midColor
         const pct = Math.round(Math.max(0, Math.min(1, t)) * 100)
-        bg = midC
+        const solid = midC
           ? t < 0.5
             ? `color-mix(in oklch, ${midC} ${pct * 2}%, ${minC})`
             : `color-mix(in oklch, ${maxC} ${(pct - 50) * 2}%, ${midC})`
           : `color-mix(in oklch, ${maxC} ${pct}%, ${minC})`
+        bg = `color-mix(in oklch, ${solid} 28%, transparent)`
       }
     }
 
-    // Optional leading icon (arrow / traffic).
     let icon: React.ReactNode = null
     if (iconRule) {
       const isPos = num > 0
@@ -658,7 +656,6 @@ export function DataGrid<T>({
       icon = <Icon className="size-3.5 shrink-0" style={{ color }} />
     }
 
-    // Data bar layer (subtle, behind text).
     let bar: React.ReactNode = null
     if (dataBar) {
       const scale = scales.get(col.id)
@@ -672,34 +669,18 @@ export function DataGrid<T>({
           <div
             className="pointer-events-none absolute inset-y-1 rounded-[3px]"
             style={{
-              width: `calc(${Math.max(2, Math.min(100, Math.abs(pct)))}% - 4px)`,
+              width: `${Math.max(2, Math.min(100, Math.abs(pct)))}%`,
               backgroundColor: barColor,
-              opacity: 0.35,
-              right: isNeg ? 4 : undefined,
-              left: isNeg ? undefined : 4,
+              opacity: 0.3,
+              right: isNeg ? 0 : undefined,
+              left: isNeg ? undefined : 0,
             }}
           />
         )
       }
     }
 
-    const hasLayer = Boolean(bar)
-    const isHighlight = Boolean(highlight)
-
-    return (
-      <span
-        className={cn(
-          'relative inline-flex w-full items-center gap-1.5 px-1.5 py-0.5 text-sm tabular-nums',
-          hasLayer && 'rounded-[3px]',
-          isHighlight && 'font-medium',
-        )}
-        style={{ backgroundColor: bg, color: textColor }}
-      >
-        {bar}
-        {icon}
-        <span className={cn('relative z-[1] truncate', hasLayer && 'font-medium')}>{content}</span>
-      </span>
-    )
+    return { bg, textColor, icon, bar, hasLayer: Boolean(bar), isHighlight: Boolean(highlight) }
   }
 
   const stickyStyle = (col: ColumnDef<T>): React.CSSProperties => {
@@ -1001,17 +982,24 @@ export function DataGrid<T>({
           const isEditing =
             editingCell?.rowId === id && editingCell?.columnId === col.id
           const text = formatCellValue(getCellValue(row, col), row, col)
+          const fmt = resolveCellFormat(row, col)
           return (
             <div
               key={col.id}
               data-slot="data-grid-cell"
               className={cn(
-                'flex shrink-0 items-center border-r px-3 text-sm',
+                'relative flex shrink-0 items-center gap-1.5 overflow-hidden border-r px-3 text-sm',
                 ALIGN_CLASS[col.align ?? 'left'],
                 isPinned(col.id) && 'bg-inherit',
                 enableEditing && col.editable !== false && 'cursor-text',
+                fmt?.isHighlight && 'font-medium',
               )}
-              style={{ width: colWidth(col.id), ...stickyStyle(col) }}
+              style={{
+                width: colWidth(col.id),
+                ...stickyStyle(col),
+                ...(fmt?.bg ? { backgroundColor: fmt.bg } : {}),
+                ...(fmt?.textColor ? { color: fmt.textColor } : {}),
+              }}
               onClick={() => {
                 if (enableEditing && col.editable !== false && !isEditing) {
                   startEdit(id, col.id, text)
@@ -1032,7 +1020,13 @@ export function DataGrid<T>({
                   }}
                 />
               ) : (
-                <span className="truncate">{renderFormattedCell(row, col, leaf.index)}</span>
+                <>
+                  {fmt?.bar}
+                  {fmt?.icon}
+                  <span className={cn('relative z-[1] truncate', fmt?.hasLayer && 'font-medium')}>
+                    {renderCellContent(row, col, leaf.index)}
+                  </span>
+                </>
               )}
             </div>
           )
